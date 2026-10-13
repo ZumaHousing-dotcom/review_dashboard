@@ -165,7 +165,7 @@ def fetch_appfolio(csv_path=None):
 def _pick_date(row):
     """First value that looks like a date (2026-01-31...), ignoring yes/no columns."""
     low = {k.strip().lower(): v for k, v in row.items() if k}
-    names = ["submitted_at", "completed_at", "created_at", "submitted", "date", "completed", "created"]
+    names = ["reviewed_at", "submitted_at", "completed_at", "created_at", "submitted", "date", "completed", "created"]
     names += [k for k in low if k.endswith("_at") or "date" in k]
     for n in names:
         v = low.get(n)
@@ -182,7 +182,7 @@ def _af_row(i, row):
         rating = None
     return review("appfolio", _pick(row, "id", "survey id") or i,
                   _pick(row, "name", "resident", "tenant", "author"), rating,
-                  _pick(row, "comment", "comments", "review", "feedback", "text", "additional_comments", "open_response"),
+                  _pick(row, "comment", "comments", "review", "feedback", "text", "body", "additional_comments", "open_response"),
                   _pick_date(row))
 
 
@@ -197,6 +197,34 @@ def _is_test(row):
                 and re.search(r"\btest(er|ing)?\b", str(v or ""), re.I):
             return True
     return False
+
+
+def load_appfolio_csv(path):
+    """Upload an AppFolio report download into the appfolio_reviews table. Re-running with an
+    overlapping file is safe: rows are matched on external_id and updated, not duplicated."""
+    import hashlib
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key, "Content-Type": "application/json",
+               "Prefer": "resolution=merge-duplicates,return=minimal"}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    text = Path(path).read_text(encoding="utf-8-sig")
+    rows = []
+    for i, raw in enumerate(csv.DictReader(text.splitlines())):
+        rv = _af_row(i, raw)
+        fp = "|".join(str(rv[k] or "") for k in ("author", "date", "text", "rating"))
+        ext = _pick(raw, "id", "survey id", "response id") or hashlib.sha1(fp.encode()).hexdigest()
+        rows.append({"external_id": str(ext), "author": rv["author"], "rating": rv["rating"],
+                     "body": rv["text"], "reviewed_at": rv["date"], "raw": raw,
+                     "category": _pick(raw, "survey", "survey type", "type", "category"),
+                     "property": _pick(raw, "property", "property name")})
+    for n in range(0, len(rows), 500):
+        r = requests.post(f"{base}/rest/v1/appfolio_reviews", params={"on_conflict": "external_id"},
+                          headers=headers, data=json.dumps(rows[n:n + 500]), timeout=TIMEOUT)
+        if not r.ok:
+            sys.exit(f"Supabase said {r.status_code}: {r.text[:300]}")
+    print(f"loaded {len(rows)} rows into appfolio_reviews")
 
 
 def summarize_supabase():
@@ -364,12 +392,15 @@ def main():
     ap.add_argument("--out", default="reviews.json")
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
+    ap.add_argument("--load-appfolio-csv", metavar="FILE", help="upload an AppFolio report into Supabase")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
     ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.load_appfolio_csv:
+        return load_appfolio_csv(a.load_appfolio_csv)
     if a.summary:
         return summarize_supabase()
     if a.tables:
