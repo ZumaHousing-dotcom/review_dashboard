@@ -1,3 +1,4 @@
 .env
 reviews.json
 __pycache__/
+*.csv
