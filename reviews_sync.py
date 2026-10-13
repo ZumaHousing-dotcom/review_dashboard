@@ -199,6 +199,24 @@ def _is_test(row):
     return False
 
 
+def list_tables():
+    """Print every table in the Supabase project with its column names (no row data)."""
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    r = requests.get(f"{base}/rest/v1/", headers=headers, timeout=TIMEOUT)
+    if not r.ok:
+        sys.exit(f"Supabase said {r.status_code}: {r.text[:300]}")
+    defs = r.json().get("definitions", {})
+    print(f"{len(defs)} tables found\n")
+    for name in sorted(defs):
+        cols = list((defs[name].get("properties") or {}))
+        print(f"{name}  ({len(cols)} columns)")
+        print("   " + ", ".join(cols[:25]) + (" ..." if len(cols) > 25 else ""))
+
+
 def inspect_supabase():
     """Print column names and types (never any row data) for each configured table."""
     base = need("SUPABASE_URL").rstrip("/")
@@ -304,10 +322,13 @@ def main():
     ap.add_argument("--out", default="reviews.json")
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
+    ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.tables:
+        return list_tables()
     if a.inspect:
         return inspect_supabase()
     if a.find_place:
