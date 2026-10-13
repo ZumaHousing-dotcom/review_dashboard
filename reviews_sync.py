@@ -192,7 +192,9 @@ def fetch_supabase():
     SUPABASE_TABLE (one table, or several separated by commas). Test entries are skipped."""
     base = need("SUPABASE_URL").rstrip("/")
     key = need("SUPABASE_KEY")
-    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):  # old-style JWT keys also go in Authorization; new sb_* keys must not
+        headers["Authorization"] = f"Bearer {key}"
     out = []
     for table in [t.strip() for t in need("SUPABASE_TABLE").split(",") if t.strip()]:
         rows, start, page = [], 0, 1000
