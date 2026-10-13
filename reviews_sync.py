@@ -266,12 +266,20 @@ def fetch_supabase():
             if len(batch) < page:
                 break
             start += page
-        done = [x for x in rows if not x.get("is_test") and x.get("completed")]
-        n_test = sum(1 for x in rows if x.get("is_test"))
-        n_open = sum(1 for x in rows if not x.get("is_test") and not x.get("completed"))
-        print(f"  {table}: {len(done)} kept, {n_test} test rows skipped, {n_open} unfinished skipped")
-        cat = re.sub(r"_survey_\d+$", "", table)
-        out += [_survey_row(cat, table, x) for x in done]
+        if re.search(r"_survey_\d+$", table):
+            done = [x for x in rows if not x.get("is_test") and x.get("completed")]
+            n_test = sum(1 for x in rows if x.get("is_test"))
+            n_open = sum(1 for x in rows if not x.get("is_test") and not x.get("completed"))
+            print(f"  {table}: {len(done)} kept, {n_test} test rows skipped, {n_open} unfinished skipped")
+            cat = re.sub(r"_survey_\d+$", "", table)
+            out += [_survey_row(cat, table, x) for x in done]
+        else:  # a table loaded from an AppFolio report download
+            done = [x for x in rows if not _is_test(x)]
+            print(f"  {table}: {len(done)} kept, {len(rows) - len(done)} test rows skipped")
+            for i, x in enumerate(done):
+                rv = _af_row(i, x)
+                rv["id"] = f"appfolio:{table}:{x.get('id', i)}"
+                out.append(rv)
     return out
 
 
@@ -317,6 +325,16 @@ def main():
         except Exception as e:  # keep going so one broken source doesn't block the rest
             errors[s] = str(e)
             print(f"{s}: FAILED - {e}", file=sys.stderr)
+    seen, unique = set(), []
+    for r in reviews:  # weekly downloads overlap, so drop exact repeats
+        k = (r["source"], r["author"], r["date"], r["text"], r["rating"])
+        if r["id"] in seen or (r["text"] and k in seen):
+            continue
+        seen.add(r["id"]); seen.add(k)
+        unique.append(r)
+    if len(unique) != len(reviews):
+        print(f"removed {len(reviews) - len(unique)} duplicate reviews")
+    reviews = unique
     reviews.sort(key=lambda r: str(r["date"] or ""), reverse=True)
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(),
                "business": "Zuma Housing", "reviews": reviews, "errors": errors}
