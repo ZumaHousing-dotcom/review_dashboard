@@ -199,6 +199,48 @@ def _is_test(row):
     return False
 
 
+def summarize_supabase():
+    """Counts only: rows per source and date range for the review tables. No names or text."""
+    from collections import Counter
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+
+    def rows(table, cols):
+        out, start = [], 0
+        while True:
+            r = requests.get(f"{base}/rest/v1/{table}", params={"select": cols}, timeout=TIMEOUT,
+                             headers=dict(headers, Range=f"{start}-{start + 999}"))
+            if not r.ok:
+                print(f"  {table}: error {r.status_code} {r.text[:200]}")
+                return None
+            out += r.json()
+            if len(r.json()) < 1000:
+                return out
+            start += 1000
+
+    def span(vals):
+        vals = sorted(v[:10] for v in vals if v)
+        return f"{vals[0]} to {vals[-1]}" if vals else "no dates"
+
+    for table, src, date in [("ri_reviews", "source", "created_at"),
+                             ("google_reviews", None, "published_at"),
+                             ("ri_properties", None, None)]:
+        print(f"\n{table}")
+        data = rows(table, ",".join(c for c in (src, date, "name" if table == "ri_properties" else None) if c) or "*")
+        if data is None:
+            continue
+        print(f"  {len(data)} rows" + (f", dates {span([d.get(date) for d in data])}" if date else ""))
+        if src:
+            for k, n in Counter(d.get(src) for d in data).most_common():
+                sub = [d.get(date) for d in data if d.get(src) == k]
+                print(f"    {k}: {n} ({span(sub)})")
+        if table == "ri_properties":
+            print("  properties: " + ", ".join(sorted(str(d.get("name")) for d in data))[:600])
+
+
 def list_tables():
     """Print every table in the Supabase project with its column names (no row data)."""
     base = need("SUPABASE_URL").rstrip("/")
@@ -322,11 +364,14 @@ def main():
     ap.add_argument("--out", default="reviews.json")
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
+    ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
     ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.summary:
+        return summarize_supabase()
     if a.tables:
         return list_tables()
     if a.inspect:
