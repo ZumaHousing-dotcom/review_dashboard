@@ -42,8 +42,8 @@ def need(name):
     return v
 
 
-def review(source, rid, author, rating, text, date, url=None, reply=None):
-    return {"id": f"{source}:{rid}", "source": source, "author": author or "Anonymous",
+def review(source, rid, author, rating, text, date, url=None, reply=None, category=None):
+    return {"category": category, "id": f"{source}:{rid}", "source": source, "author": author or "Anonymous",
             "rating": float(rating) if rating is not None else None,
             "text": (text or "").strip(), "date": date, "url": url, "reply": reply}
 
@@ -163,35 +163,58 @@ def fetch_appfolio(csv_path=None):
 
 
 def _af_row(i, row):
-    rating = _pick(row, "rating", "score", "overall rating", "overall", "stars")
+    rating = _pick(row, "rating", "score", "overall rating", "overall", "stars", "overall_rating", "overall_score", "satisfaction", "nps")
     try:
         rating = float(rating)
     except (TypeError, ValueError):
         rating = None
     return review("appfolio", _pick(row, "id", "survey id") or i,
                   _pick(row, "name", "resident", "tenant", "author"), rating,
-                  _pick(row, "comment", "comments", "review", "feedback", "text"),
-                  _pick(row, "date", "submitted", "submitted at", "completed", "created"))
+                  _pick(row, "comment", "comments", "review", "feedback", "text", "additional_comments", "open_response"),
+                  _pick(row, "date", "submitted", "submitted at", "completed", "created", "created_at", "submitted_at", "completed_at"))
+
+
+def _is_test(row):
+    """True for test entries: a truthy is_test/test column, or 'test' as a whole word in a
+    name/email/comment-style field."""
+    for k, v in row.items():
+        k = (k or "").lower()
+        if k in ("is_test", "test", "testing") and str(v).lower() in ("true", "1", "t", "yes"):
+            return True
+        if any(w in k for w in ("name", "email", "resident", "tenant", "author")) \
+                and re.search(r"\btest(er|ing)?\b", str(v or ""), re.I):
+            return True
+    return False
 
 
 def fetch_supabase():
     """AppFolio survey data stored in Supabase. Needs SUPABASE_URL, SUPABASE_KEY and
-    SUPABASE_TABLE. Column names are matched automatically (see _af_row)."""
+    SUPABASE_TABLE (one table, or several separated by commas). Test entries are skipped."""
     base = need("SUPABASE_URL").rstrip("/")
     key = need("SUPABASE_KEY")
     headers = {"apikey": key, "Authorization": f"Bearer {key}"}
-    rows, start, page = [], 0, 1000
-    while True:
-        h = dict(headers, Range=f"{start}-{start + page - 1}")
-        r = requests.get(f"{base}/rest/v1/{need('SUPABASE_TABLE')}", headers=h,
-                         params={"select": "*"}, timeout=TIMEOUT)
-        r.raise_for_status()
-        batch = r.json()
-        rows += batch
-        if len(batch) < page:
-            break
-        start += page
-    return [_af_row(i, x) for i, x in enumerate(rows)]
+    out = []
+    for table in [t.strip() for t in need("SUPABASE_TABLE").split(",") if t.strip()]:
+        rows, start, page = [], 0, 1000
+        while True:
+            h = dict(headers, Range=f"{start}-{start + page - 1}")
+            r = requests.get(f"{base}/rest/v1/{table}", headers=h,
+                             params={"select": "*"}, timeout=TIMEOUT)
+            r.raise_for_status()
+            batch = r.json()
+            rows += batch
+            if len(batch) < page:
+                break
+            start += page
+        real = [x for x in rows if not _is_test(x)]
+        print(f"  {table}: {len(real)} kept, {len(rows) - len(real)} test rows skipped")
+        cat = re.sub(r"_survey_\d+$", "", table)
+        for i, x in enumerate(real):
+            rv = _af_row(i, x)
+            rv["id"] = f"appfolio:{table}:{x.get('id', i)}"
+            rv["category"] = cat
+            out.append(rv)
+    return out
 
 
 # ------------------------------------------------------------------ main
