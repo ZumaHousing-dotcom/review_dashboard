@@ -162,6 +162,18 @@ def fetch_appfolio(csv_path=None):
     return [_af_row(i, row) for i, row in enumerate(csv.DictReader(text.splitlines()))]
 
 
+def _pick_date(row):
+    """First value that looks like a date (2026-01-31...), ignoring yes/no columns."""
+    low = {k.strip().lower(): v for k, v in row.items() if k}
+    names = ["submitted_at", "completed_at", "created_at", "submitted", "date", "completed", "created"]
+    names += [k for k in low if k.endswith("_at") or "date" in k]
+    for n in names:
+        v = low.get(n)
+        if isinstance(v, str) and re.match(r"\d{4}-\d{2}-\d{2}", v):
+            return v
+    return None
+
+
 def _af_row(i, row):
     rating = _pick(row, "rating", "score", "overall rating", "overall", "stars", "overall_rating", "overall_score", "satisfaction", "nps")
     try:
@@ -171,7 +183,7 @@ def _af_row(i, row):
     return review("appfolio", _pick(row, "id", "survey id") or i,
                   _pick(row, "name", "resident", "tenant", "author"), rating,
                   _pick(row, "comment", "comments", "review", "feedback", "text", "additional_comments", "open_response"),
-                  _pick(row, "date", "submitted", "submitted at", "completed", "created", "created_at", "submitted_at", "completed_at"))
+                  _pick_date(row))
 
 
 def _is_test(row):
@@ -260,7 +272,7 @@ def main():
         except Exception as e:  # keep going so one broken source doesn't block the rest
             errors[s] = str(e)
             print(f"{s}: FAILED - {e}", file=sys.stderr)
-    reviews.sort(key=lambda r: r["date"] or "", reverse=True)
+    reviews.sort(key=lambda r: str(r["date"] or ""), reverse=True)
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(),
                "business": "Zuma Housing", "reviews": reviews, "errors": errors}
     Path(a.out).write_text(json.dumps(payload, indent=2, ensure_ascii=False))
