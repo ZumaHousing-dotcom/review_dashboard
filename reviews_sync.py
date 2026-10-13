@@ -219,6 +219,30 @@ def inspect_supabase():
             print(f"  {name}  [{info.get('format') or info.get('type')}]")
 
 
+# Extra survey questions, by survey type (rating-style first, then multiple-choice answers).
+SURVEY_SCORES = {"maintenance": ["speed", "tech_rating"], "move_in": ["leasing"],
+                 "move_out": ["instructions"], "showings": ["booking", "agent_rating"]}
+SURVEY_ANSWERS = {"maintenance": ["fixed", "informed"], "move_in": ["ready", "source"],
+                  "move_out": ["inspection", "reason", "rent_again"], "showings": ["matched", "apply"]}
+
+
+def _survey_row(cat, table, x):
+    """Turn one completed survey response into a review."""
+    good, better = (x.get("did_well") or "").strip(), (x.get("do_better") or "").strip()
+    text = "\n\n".join(p for p in (good, f"Could be better: {better}" if better else "") if p)
+    name = (x.get("quote_name") or "").strip() if x.get("quote_ok") else ""
+    month = next((x[k] for k in ("done_month", "move_in_month", "move_out_month", "showing_month")
+                  if x.get(k)), None)
+    rv = review("appfolio", f"{table}:{x.get('id')}", name or "Anonymous", x.get("overall"),
+                text, x.get("created_at"), category=cat)
+    rv.update({"nps": x.get("nps"), "property": x.get("property"), "agent": x.get("agent"),
+               "month": month, "can_quote": bool(x.get("quote_ok")),
+               "needs_recovery": bool(x.get("needs_recovery")),
+               "scores": {k: x[k] for k in SURVEY_SCORES.get(cat, []) if x.get(k) is not None},
+               "answers": {k: x[k] for k in SURVEY_ANSWERS.get(cat, []) if x.get(k)}})
+    return rv
+
+
 def fetch_supabase():
     """AppFolio survey data stored in Supabase. Needs SUPABASE_URL, SUPABASE_KEY and
     SUPABASE_TABLE (one table, or several separated by commas). Test entries are skipped."""
@@ -242,14 +266,12 @@ def fetch_supabase():
             if len(batch) < page:
                 break
             start += page
-        real = [x for x in rows if not _is_test(x)]
-        print(f"  {table}: {len(real)} kept, {len(rows) - len(real)} test rows skipped")
+        done = [x for x in rows if not x.get("is_test") and x.get("completed")]
+        n_test = sum(1 for x in rows if x.get("is_test"))
+        n_open = sum(1 for x in rows if not x.get("is_test") and not x.get("completed"))
+        print(f"  {table}: {len(done)} kept, {n_test} test rows skipped, {n_open} unfinished skipped")
         cat = re.sub(r"_survey_\d+$", "", table)
-        for i, x in enumerate(real):
-            rv = _af_row(i, x)
-            rv["id"] = f"appfolio:{table}:{x.get('id', i)}"
-            rv["category"] = cat
-            out.append(rv)
+        out += [_survey_row(cat, table, x) for x in done]
     return out
 
 
