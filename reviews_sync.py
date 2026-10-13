@@ -174,6 +174,26 @@ def _af_row(i, row):
                   _pick(row, "date", "submitted", "submitted at", "completed", "created"))
 
 
+def fetch_supabase():
+    """AppFolio survey data stored in Supabase. Needs SUPABASE_URL, SUPABASE_KEY and
+    SUPABASE_TABLE. Column names are matched automatically (see _af_row)."""
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    rows, start, page = [], 0, 1000
+    while True:
+        h = dict(headers, Range=f"{start}-{start + page - 1}")
+        r = requests.get(f"{base}/rest/v1/{need('SUPABASE_TABLE')}", headers=h,
+                         params={"select": "*"}, timeout=TIMEOUT)
+        r.raise_for_status()
+        batch = r.json()
+        rows += batch
+        if len(batch) < page:
+            break
+        start += page
+    return [_af_row(i, x) for i, x in enumerate(rows)]
+
+
 # ------------------------------------------------------------------ main
 def inject(html_path, payload):
     p = Path(html_path)
@@ -202,7 +222,8 @@ def main():
         return find_place(a.find_place)
     use_serp = bool(os.environ.get("SERPAPI_KEY"))
     fetchers = {"google": fetch_google_serpapi if use_serp else fetch_google, "yelp": fetch_yelp,
-                "appfolio": lambda: fetch_appfolio(a.appfolio_csv)}
+                "appfolio": (fetch_supabase if os.environ.get("SUPABASE_URL") and not a.appfolio_csv
+                     else lambda: fetch_appfolio(a.appfolio_csv))}
     reviews, errors = [], {}
     for s in [x.strip() for x in a.sources.split(",") if x.strip()]:
         try:
