@@ -199,6 +199,26 @@ def _is_test(row):
     return False
 
 
+def inspect_supabase():
+    """Print column names and types (never any row data) for each configured table."""
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    r = requests.get(f"{base}/rest/v1/", headers=headers, timeout=TIMEOUT)
+    if not r.ok:
+        sys.exit(f"Supabase said {r.status_code}: {r.text[:300]}")
+    defs = r.json().get("definitions", {})
+    for table in [t.strip() for t in need("SUPABASE_TABLE").split(",") if t.strip()]:
+        print(f"\n{table}")
+        cols = defs.get(table, {}).get("properties")
+        if not cols:
+            print("  (not found, or no columns visible)")
+        for name, info in (cols or {}).items():
+            print(f"  {name}  [{info.get('format') or info.get('type')}]")
+
+
 def fetch_supabase():
     """AppFolio survey data stored in Supabase. Needs SUPABASE_URL, SUPABASE_KEY and
     SUPABASE_TABLE (one table, or several separated by commas). Test entries are skipped."""
@@ -254,9 +274,12 @@ def main():
     ap.add_argument("--out", default="reviews.json")
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
+    ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.inspect:
+        return inspect_supabase()
     if a.find_place:
         return find_place(a.find_place)
     use_serp = bool(os.environ.get("SERPAPI_KEY"))
