@@ -75,6 +75,49 @@ def fetch_google():
         params["pageToken"] = d["nextPageToken"]
 
 
+def fetch_google_serpapi():
+    """Google reviews via SerpApi (no Google approval needed). Needs SERPAPI_KEY and
+    either SERPAPI_PLACE_ID (starts with ChIJ) or SERPAPI_DATA_ID."""
+    params = {"engine": "google_maps_reviews", "api_key": need("SERPAPI_KEY"),
+              "sort_by": "newestFirst", "hl": "en"}
+    if os.environ.get("SERPAPI_PLACE_ID"):
+        params["place_id"] = os.environ["SERPAPI_PLACE_ID"]
+    else:
+        params["data_id"] = need("SERPAPI_DATA_ID")
+    out = []
+    while True:
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        d = r.json()
+        if d.get("error"):
+            raise RuntimeError(d["error"])
+        for x in d.get("reviews", []):
+            out.append(review("google", x.get("review_id") or x.get("link"),
+                              x.get("user", {}).get("name"), x.get("rating"),
+                              x.get("extracted_snippet", {}).get("original") or x.get("snippet"),
+                              x.get("iso_date") or x.get("date"), x.get("link"),
+                              (x.get("response") or {}).get("extracted_snippet", {}).get("original")
+                              or (x.get("response") or {}).get("snippet")))
+        token = d.get("serpapi_pagination", {}).get("next_page_token")
+        if not token:
+            return out
+        params["next_page_token"] = token
+        params["num"] = 20
+
+
+def find_place(name):
+    """Print the IDs for a business so you can paste them into .env."""
+    r = requests.get("https://serpapi.com/search.json", timeout=TIMEOUT, params={
+        "engine": "google_maps", "q": name, "type": "search", "api_key": need("SERPAPI_KEY")})
+    r.raise_for_status()
+    d = r.json()
+    hits = d.get("local_results") or ([d["place_results"]] if d.get("place_results") else [])
+    for h in hits[:5]:
+        print(f"{h.get('title')} | {h.get('address')}\n  SERPAPI_PLACE_ID={h.get('place_id')}\n  SERPAPI_DATA_ID={h.get('data_id')}")
+    if not hits:
+        print("No matches found. Try adding the city, e.g. 'Zuma Housing Austin TX'.")
+
+
 # ------------------------------------------------------------------ Yelp
 def fetch_yelp():
     """Yelp Fusion API. NOTE: Yelp only returns up to 3 review excerpts per business."""
@@ -152,9 +195,13 @@ def main():
     ap.add_argument("--out", default="reviews.json")
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
+    ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
-    fetchers = {"google": fetch_google, "yelp": fetch_yelp,
+    if a.find_place:
+        return find_place(a.find_place)
+    use_serp = bool(os.environ.get("SERPAPI_KEY"))
+    fetchers = {"google": fetch_google_serpapi if use_serp else fetch_google, "yelp": fetch_yelp,
                 "appfolio": lambda: fetch_appfolio(a.appfolio_csv)}
     reviews, errors = [], {}
     for s in [x.strip() for x in a.sources.split(",") if x.strip()]:
