@@ -219,6 +219,7 @@ def load_appfolio_csv(path):
                      "body": rv["text"], "reviewed_at": rv["date"], "raw": raw,
                      "category": _pick(raw, "survey", "survey type", "type", "category"),
                      "property": _pick(raw, "property", "property name")})
+    rows = list({r["external_id"]: r for r in rows}.values())  # one row per ID within a single upload
     for n in range(0, len(rows), 500):
         r = requests.post(f"{base}/rest/v1/appfolio_reviews", params={"on_conflict": "external_id"},
                           headers=headers, data=json.dumps(rows[n:n + 500]), timeout=TIMEOUT)
