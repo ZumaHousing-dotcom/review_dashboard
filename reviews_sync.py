@@ -202,7 +202,9 @@ def fetch_supabase():
             h = dict(headers, Range=f"{start}-{start + page - 1}")
             r = requests.get(f"{base}/rest/v1/{table}", headers=h,
                              params={"select": "*"}, timeout=TIMEOUT)
-            r.raise_for_status()
+            if not r.ok:
+                raise RuntimeError(f"Supabase said {r.status_code} for table '{table}': {r.text[:300]} "
+                                   f"(key starts '{key[:15]}', {len(key)} characters)")
             batch = r.json()
             rows += batch
             if len(batch) < page:
