@@ -540,7 +540,8 @@ def main():
     seen, unique = set(), []
     for r in reviews:  # weekly downloads overlap, so drop exact repeats
         k = (r["source"], r["author"], r["date"], r["text"], r["rating"])
-        if r["id"] in seen or (r["text"] and k in seen):
+        # AppFolio names are all "Anonymous", so only trust its stable IDs; others can also match on content
+        if r["id"] in seen or (r["source"] != "appfolio" and r["text"] and k in seen):
             continue
         seen.add(r["id"]); seen.add(k)
         unique.append(r)
