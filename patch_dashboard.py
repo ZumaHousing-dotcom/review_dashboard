@@ -12,7 +12,7 @@ from pathlib import Path
 OPEN = '<script type="__bundler/template">\n'
 CLOSE = "\n  </script>"
 
-NEW_SYNC = r"""  syncSupabase = async () => {
+NEW_SYNC = r"""  syncSupabase = async () => { // sync-v2
     if (this.state.syncing) return;
     this.setState({ syncing: true, upErr: '' });
     const URL_ = 'https://ykejzgmzebmkeoeqjkan.supabase.co', KEY = 'sb_publishable_qT-NrwPKfdoyJE4Q1tY-lQ_7vLvv5Hw';
@@ -39,12 +39,12 @@ NEW_SYNC = r"""  syncSupabase = async () => {
       ]);
       if (!rows) throw new Error('ri_reviews not found in Supabase');
       const props = Object.fromEntries((pr || []).map(x => [x.id, x.name]));
-      const g = rows.filter(r => r.source === 'google');
+      const g = rows.filter(r => r.source === 'google'), yl = rows.filter(r => r.source === 'yelp');
       const prev = this.state.fileData;
       const haveAf = !!(af && af.length);
       // Supabase is the source of truth: replace earlier Google/AppFolio imports instead of doubling them up.
-      const existing = prev ? prev.reviews.filter(r => !r.id.startsWith('supabase-google:') && !(haveAf && r.source === 'AppFolio')) : [];
-      const files = prev && prev.files ? prev.files.filter(f => f.name !== 'supabase-google' && !(haveAf && f.source === 'AppFolio')) : [];
+      const existing = prev ? prev.reviews.filter(r => !r.id.startsWith('supabase-google:') && !r.id.startsWith('supabase-yelp:') && !(haveAf && r.source === 'AppFolio')) : [];
+      const files = prev && prev.files ? prev.files.filter(f => f.name !== 'supabase-google' && f.name !== 'supabase-yelp' && !(haveAf && f.source === 'AppFolio')) : [];
       let out = null;
       const add = (args, extra) => {
         out = A.buildReviews({ ...args, meta: {}, fallbackProp: prev ? prev.prop : undefined, existing: out ? out.reviews : existing });
@@ -54,6 +54,11 @@ NEW_SYNC = r"""  syncSupabase = async () => {
         const header = ['Review text', 'Rating', 'Date', 'Author', 'Property'];
         const dataRows = g.map(r => [r.text || '', r.rating, r.created_at ? new Date(r.created_at) : '', r.author || '', props[r.property_id] || 'Zuma Housing']);
         add({ dataRows, header, mapping: header, fileName: 'supabase-google', sourceOverride: 'Google' });
+      }
+      if (yl.length) {
+        const header = ['Review text', 'Rating', 'Date', 'Author', 'Property'];
+        const dataRows = yl.map(r => [r.text || '', r.rating, r.created_at ? new Date(r.created_at) : '', r.author || '', props[r.property_id] || 'Zuma Housing']);
+        add({ dataRows, header, mapping: header, fileName: 'supabase-yelp', sourceOverride: 'Yelp' });
       }
       if (haveAf) {
         // The feed has one row per question answered; the dashboard wants one row per survey, one column per question.
@@ -102,15 +107,17 @@ def main(path):
     i = html.index(OPEN) + len(OPEN)
     j = html.index(CLOSE, i)
     js = json.loads(html[i:j])
-    if "ri_appfolio_feed" in js:
-        sys.exit("Already patched; nothing to do.")
+    if "// sync-v2" in js:
+        sys.exit("Already patched with the latest version; nothing to do.")
     a = js.index("  syncSupabase = async () => {")
     b = js.index("  importAfNew = async", a)
-    for old in (OLD_SAVED_TAIL, OLD_FIRST_VISIT):
-        if js.count(old) != 1:
-            sys.exit(f"Dashboard code is not what I expected (missing: {old[:40]}...). Not patching.")
     js = js[:a] + NEW_SYNC + js[b:]
-    js = js.replace(OLD_SAVED_TAIL, NEW_SAVED_TAIL).replace(OLD_FIRST_VISIT, NEW_FIRST_VISIT)
+    # Start-up hooks: apply once (they are already present if an earlier version was patched in).
+    for old, new in ((OLD_SAVED_TAIL, NEW_SAVED_TAIL), (OLD_FIRST_VISIT, NEW_FIRST_VISIT)):
+        if js.count(old) == 1:
+            js = js.replace(old, new)
+        elif js.count(new) != 1:
+            sys.exit(f"Dashboard code is not what I expected (around: {old[:40]}...). Not patching.")
     raw = json.dumps(js, ensure_ascii=False).replace("</", "<\\u002F")
     p.write_text(html[:i] + raw + html[j:], encoding="utf-8")
     print(f"patched {path}")

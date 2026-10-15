@@ -120,6 +120,44 @@ def find_place(name):
 
 
 # ------------------------------------------------------------------ Yelp
+def _yelp_date(v):
+    """Yelp dates look like 'Oct 10, 2026'; return YYYY-MM-DD, or the original text if unreadable."""
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(str(v).strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return v
+
+
+def fetch_yelp_serpapi(max_pages=None):
+    """Yelp reviews via SerpApi (full history, newest first). Needs SERPAPI_KEY and YELP_BUSINESS_ID,
+    which is the end of your Yelp page address, e.g. 'zuma-housing-los-angeles-2'."""
+    import hashlib
+    params = {"engine": "yelp_reviews", "api_key": need("SERPAPI_KEY"),
+              "place_id": need("YELP_BUSINESS_ID"), "sortby": "date_desc", "num": 49, "start": 0}
+    out, pages = [], 0
+    while True:
+        pages += 1
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        d = r.json()
+        if d.get("error") and "hasn't returned any results" not in d["error"]:
+            raise RuntimeError(d["error"])
+        batch = d.get("reviews") or []
+        for x in batch:
+            c = x.get("comment")
+            text = c.get("text") if isinstance(c, dict) else c
+            author = (x.get("user") or {}).get("name")
+            date = _yelp_date(x.get("date"))
+            fp = f"{author}|{date}|{text}|{x.get('rating')}"
+            rid = x.get("review_id") or x.get("id") or hashlib.sha1(fp.encode()).hexdigest()
+            out.append(review("yelp", rid, author, x.get("rating"), text, date))
+        if not batch or (max_pages and pages >= max_pages):
+            return out
+        params["start"] += len(batch)
+
+
 def fetch_yelp():
     """Yelp Fusion API. NOTE: Yelp only returns up to 3 review excerpts per business."""
     r = requests.get(f"https://api.yelp.com/v3/businesses/{need('YELP_BUSINESS_ID')}/reviews",
@@ -287,8 +325,8 @@ def list_questions(table="appfolio_reviews"):
         print(line)
 
 
-def push_google_to_supabase(path="reviews.json", dry_run=False):
-    """Add Google reviews from reviews.json to the dashboard's ri_reviews table.
+def push_google_to_supabase(path="reviews.json", dry_run=False, sources=("google",)):
+    """Add Google (and optionally Yelp) reviews from reviews.json to the dashboard's ri_reviews table.
     Only ever INSERTS reviews that are not there yet. It never edits or deletes existing rows."""
     import uuid
     base = need("SUPABASE_URL").rstrip("/")
@@ -318,23 +356,23 @@ def push_google_to_supabase(path="reviews.json", dry_run=False):
     spec = requests.get(f"{base}/rest/v1/", headers=headers, timeout=TIMEOUT).json()
     id_col = spec.get("definitions", {}).get("ri_reviews", {}).get("properties", {}).get("id", {})
     need_id = not id_col.get("default")
-    have = get("ri_reviews", "external_id,author,text", {"source": "eq.google"})
-    seen_ext = {h["external_id"] for h in have if h.get("external_id")}
-    seen_content = {((h.get("author") or "").strip(), (h.get("text") or "").strip()) for h in have}
+    have = get("ri_reviews", "source,external_id,author,text", {"source": "in.(" + ",".join(sources) + ")"})
+    seen_ext = {(h["source"], h["external_id"]) for h in have if h.get("external_id")}
+    seen_content = {(h["source"], (h.get("author") or "").strip(), (h.get("text") or "").strip()) for h in have}
     new = []
     for r in json.loads(Path(path).read_text())["reviews"]:
-        if r["source"] != "google":
+        if r["source"] not in sources:
             continue
         ext = r["id"].split(":", 1)[1]
-        if ext in seen_ext or (r["author"], r["text"]) in seen_content:
+        if (r["source"], ext) in seen_ext or (r["source"], r["author"], r["text"]) in seen_content:
             continue
-        row = {"property_id": prop_id, "source": "google", "external_id": ext, "author": r["author"],
+        row = {"property_id": prop_id, "source": r["source"], "external_id": ext, "author": r["author"],
                "rating": int(r["rating"]) if r["rating"] is not None else None, "text": r["text"],
                "reply": r.get("reply"), "created_at": r["date"], "is_excerpt": False}
         if need_id:
             row["id"] = str(uuid.uuid4())
         new.append(row)
-    print(f"{len(have)} Google reviews already in ri_reviews; {len(new)} new to add")
+    print(f"{len(have)} {'+'.join(sources)} reviews already in ri_reviews; {len(new)} new to add")
     if dry_run or not new:
         print("(dry run, nothing written)" if dry_run else "nothing to add")
         return
@@ -343,7 +381,7 @@ def push_google_to_supabase(path="reviews.json", dry_run=False):
         r = requests.post(f"{base}/rest/v1/ri_reviews", headers=wh, data=json.dumps(new[n:n + 200]), timeout=TIMEOUT)
         if not r.ok:
             sys.exit(f"Supabase said {r.status_code} after adding {n} rows: {r.text[:300]}")
-    print(f"added {len(new)} Google reviews to ri_reviews")
+    print(f"added {len(new)} reviews to ri_reviews")
 
 
 def summarize_supabase():
@@ -566,6 +604,8 @@ def main():
     ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
     ap.add_argument("--google-pages", type=int, metavar="N",
                     help="only fetch the newest N pages of Google reviews (saves SerpApi searches)")
+    ap.add_argument("--yelp-pages", type=int, metavar="N", help="only fetch the newest N pages of Yelp reviews")
+    ap.add_argument("--push-reviews", action="store_true", help="add Google and Yelp reviews from reviews.json to ri_reviews")
     ap.add_argument("--push-google", action="store_true", help="add Google reviews from reviews.json to ri_reviews")
     ap.add_argument("--dry-run", action="store_true", help="with --push-google: show what would be added, write nothing")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
@@ -576,6 +616,8 @@ def main():
     load_env()
     if a.questions:
         return list_questions()
+    if a.push_reviews:
+        return push_google_to_supabase(a.out, a.dry_run, ("google", "yelp"))
     if a.push_google:
         return push_google_to_supabase(a.out, a.dry_run)
     if a.check:
@@ -591,7 +633,8 @@ def main():
     if a.find_place:
         return find_place(a.find_place)
     use_serp = bool(os.environ.get("SERPAPI_KEY"))
-    fetchers = {"google": (lambda: fetch_google_serpapi(a.google_pages)) if use_serp else fetch_google, "yelp": fetch_yelp,
+    use_serp_yelp = bool(os.environ.get("SERPAPI_KEY")) and not os.environ.get("YELP_API_KEY")
+    fetchers = {"google": (lambda: fetch_google_serpapi(a.google_pages)) if use_serp else fetch_google, "yelp": (lambda: fetch_yelp_serpapi(a.yelp_pages)) if use_serp_yelp else fetch_yelp,
                 "appfolio": (fetch_supabase if os.environ.get("SUPABASE_URL") and not a.appfolio_csv
                      else lambda: fetch_appfolio(a.appfolio_csv))}
     reviews, errors = [], {}

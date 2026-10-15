@@ -26,6 +26,9 @@ Google reviews from `ri_reviews` and AppFolio survey answers from the `ri_appfol
        python reviews_sync.py --sources google
        python reviews_sync.py --push-google --dry-run   # shows what would be added, writes nothing
        python reviews_sync.py --push-google             # adds the missing ones (never edits or deletes)
+       python reviews_sync.py --sources google,yelp --out reviews.json && python reviews_sync.py --push-reviews   # Google + Yelp
+
+   Yelp needs `YELP_BUSINESS_ID` (the end of your Yelp page address) and runs through SerpApi. Run `supabase/allow_yelp_read.sql` once so the dashboard can read Yelp rows.
 
 3. Deploy the updated `dashboard.html` to Netlify (as `index.html`).
 

@@ -1,6 +1,6 @@
 name: Daily review sync
 
-# Pulls the newest Google reviews and adds any new ones to Supabase (ri_reviews).
+# Pulls the newest Google and Yelp reviews and adds any new ones to Supabase (ri_reviews).
 # AppFolio survey data already reaches Supabase through your own pipeline, so it is not touched here.
 on:
   schedule:
@@ -16,13 +16,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - name: Fetch newest Google reviews (2 pages keeps SerpApi use low)
-        run: python reviews_sync.py --sources google --google-pages 2 --out reviews.json
+      - name: Fetch newest Google and Yelp reviews (1 page each keeps SerpApi use low)
+        run: python reviews_sync.py --sources google,yelp --google-pages 1 --yelp-pages 1 --out reviews.json
         env:
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           SERPAPI_PLACE_ID: ${{ secrets.SERPAPI_PLACE_ID }}
+          YELP_BUSINESS_ID: ${{ secrets.YELP_BUSINESS_ID }}
       - name: Add new reviews to Supabase
-        run: python reviews_sync.py --push-google --out reviews.json
+        run: python reviews_sync.py --push-reviews --out reviews.json
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
