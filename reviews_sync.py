@@ -399,6 +399,7 @@ def _norm_date(v):
 
 def _long_rows(table, rows):
     """AppFolio survey table with one row per question -> one review per survey response."""
+    import hashlib
     from collections import defaultdict
     groups = defaultdict(lambda: defaultdict(dict))  # key -> response number -> question_no -> row
     seen = defaultdict(int)
@@ -425,7 +426,7 @@ def _long_rows(table, rows):
                 else:
                     texts.append(a if "additional feedback" in q.lower() else f"{label}: {a}")
             any_row = next(iter(qs.values()))
-            rv = review("appfolio", f"{table}:{abs(hash(key)) % 10**12}:{n}", "Anonymous",
+            rv = review("appfolio", f"{table}:{hashlib.sha1(repr(key).encode()).hexdigest()[:12]}:{n}", "Anonymous",
                         round(sum(nums) / len(nums), 2) if nums else None, "\n\n".join(texts),
                         _norm_date(key[4]) or _norm_date(key[3]),
                         category=(key[0] or "").lower().replace("-", "_").replace(" ", "_").rstrip("s") or None)
