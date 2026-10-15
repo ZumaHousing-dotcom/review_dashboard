@@ -75,7 +75,7 @@ def fetch_google():
         params["pageToken"] = d["nextPageToken"]
 
 
-def fetch_google_serpapi():
+def fetch_google_serpapi(max_pages=None):
     """Google reviews via SerpApi (no Google approval needed). Needs SERPAPI_KEY and
     either SERPAPI_PLACE_ID (starts with ChIJ) or SERPAPI_DATA_ID."""
     params = {"engine": "google_maps_reviews", "api_key": need("SERPAPI_KEY"),
@@ -84,8 +84,9 @@ def fetch_google_serpapi():
         params["place_id"] = os.environ["SERPAPI_PLACE_ID"]
     else:
         params["data_id"] = need("SERPAPI_DATA_ID")
-    out = []
+    out, pages = [], 0
     while True:
+        pages += 1
         r = requests.get("https://serpapi.com/search.json", params=params, timeout=TIMEOUT)
         r.raise_for_status()
         d = r.json()
@@ -99,7 +100,7 @@ def fetch_google_serpapi():
                               (x.get("response") or {}).get("extracted_snippet", {}).get("original")
                               or (x.get("response") or {}).get("snippet")))
         token = d.get("serpapi_pagination", {}).get("next_page_token")
-        if not token:
+        if not token or (max_pages and pages >= max_pages):
             return out
         params["next_page_token"] = token
         params["num"] = 20
@@ -563,6 +564,8 @@ def main():
     ap.add_argument("--load-appfolio-csv", metavar="FILE", help="upload an AppFolio report into Supabase")
     ap.add_argument("--check", metavar="FILE", nargs="?", const="reviews.json", help="print counts for a reviews.json")
     ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
+    ap.add_argument("--google-pages", type=int, metavar="N",
+                    help="only fetch the newest N pages of Google reviews (saves SerpApi searches)")
     ap.add_argument("--push-google", action="store_true", help="add Google reviews from reviews.json to ri_reviews")
     ap.add_argument("--dry-run", action="store_true", help="with --push-google: show what would be added, write nothing")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
@@ -588,7 +591,7 @@ def main():
     if a.find_place:
         return find_place(a.find_place)
     use_serp = bool(os.environ.get("SERPAPI_KEY"))
-    fetchers = {"google": fetch_google_serpapi if use_serp else fetch_google, "yelp": fetch_yelp,
+    fetchers = {"google": (lambda: fetch_google_serpapi(a.google_pages)) if use_serp else fetch_google, "yelp": fetch_yelp,
                 "appfolio": (fetch_supabase if os.environ.get("SUPABASE_URL") and not a.appfolio_csv
                      else lambda: fetch_appfolio(a.appfolio_csv))}
     reviews, errors = [], {}
