@@ -158,6 +158,27 @@ def fetch_yelp_serpapi(max_pages=None):
         params["start"] += len(batch)
 
 
+def debug_yelp():
+    """Show how SerpApi answered for Yelp: field names, counts and any error. No review text."""
+    for label, extra in (("newest first", {"sortby": "date_desc"}), ("default order", {}), ("small page", {"num": 10})):
+        params = {"engine": "yelp_reviews", "api_key": need("SERPAPI_KEY"),
+                  "place_id": need("YELP_BUSINESS_ID"), **extra}
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=TIMEOUT)
+        print(f"\n[{label}] HTTP {r.status_code}")
+        try:
+            d = r.json()
+        except ValueError:
+            print("  not JSON:", r.text[:200]); continue
+        print("  error:", d.get("error"))
+        print("  status:", (d.get("search_metadata") or {}).get("status"))
+        print("  fields:", sorted(d.keys()))
+        for k, v in d.items():
+            if isinstance(v, list):
+                print(f"  {k}: {len(v)} items" + (f", item fields: {sorted(v[0].keys())}" if v and isinstance(v[0], dict) else ""))
+            elif isinstance(v, dict) and k not in ("search_metadata", "search_parameters"):
+                print(f"  {k}: {dict((a, b) for a, b in v.items() if not isinstance(b, (dict, list)) and a != 'text')}")
+
+
 def fetch_yelp():
     """Yelp Fusion API. NOTE: Yelp only returns up to 3 review excerpts per business."""
     r = requests.get(f"https://api.yelp.com/v3/businesses/{need('YELP_BUSINESS_ID')}/reviews",
@@ -604,6 +625,7 @@ def main():
     ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
     ap.add_argument("--google-pages", type=int, metavar="N",
                     help="only fetch the newest N pages of Google reviews (saves SerpApi searches)")
+    ap.add_argument("--debug-yelp", action="store_true", help="show how SerpApi answers for Yelp")
     ap.add_argument("--yelp-pages", type=int, metavar="N", help="only fetch the newest N pages of Yelp reviews")
     ap.add_argument("--push-reviews", action="store_true", help="add Google and Yelp reviews from reviews.json to ri_reviews")
     ap.add_argument("--push-google", action="store_true", help="add Google reviews from reviews.json to ri_reviews")
@@ -626,6 +648,8 @@ def main():
         return load_appfolio_csv(a.load_appfolio_csv)
     if a.summary:
         return summarize_supabase()
+    if a.debug_yelp:
+        return debug_yelp()
     if a.tables:
         return list_tables()
     if a.inspect:
