@@ -390,6 +390,51 @@ def _survey_row(cat, table, x):
     return rv
 
 
+def _norm_date(v):
+    """Make dates like 10/12/2026 into 2026-10-12; leave anything else alone."""
+    v = (str(v).strip() if v else "")
+    m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", v)
+    return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else (v or None)
+
+
+def _long_rows(table, rows):
+    """AppFolio survey table with one row per question -> one review per survey response."""
+    from collections import defaultdict
+    groups = defaultdict(lambda: defaultdict(dict))  # key -> response number -> question_no -> row
+    seen = defaultdict(int)
+    for x in rows:
+        if x.get("answer") in (None, ""):
+            continue
+        key = (x.get("survey_type"), x.get("tenant"), x.get("property"), x.get("date_sent"), x.get("date_received"))
+        n = seen[(key, x.get("question_no"))]  # same question twice => a second survey from that person
+        seen[(key, x.get("question_no"))] += 1
+        groups[key][n][x.get("question_no")] = x
+    out = []
+    for key, resp in groups.items():
+        for n, qs in resp.items():
+            texts, scores, answers, nums = [], {}, {}, []
+            for no in sorted(qs, key=lambda q: (str(type(q)), q)):
+                x = qs[no]
+                q, a = (x.get("question") or f"Q{no}").strip(), str(x["answer"]).strip()
+                label = re.sub(r"[?:]+$", "", q)
+                if re.fullmatch(r"\d+(\.\d+)?", a) and 1 <= float(a) <= 5:
+                    scores[label] = float(a)
+                    nums.append(float(a))
+                elif a.lower() in ("yes", "no"):
+                    answers[label] = a
+                else:
+                    texts.append(a if "additional feedback" in q.lower() else f"{label}: {a}")
+            any_row = next(iter(qs.values()))
+            rv = review("appfolio", f"{table}:{abs(hash(key)) % 10**12}:{n}", "Anonymous",
+                        round(sum(nums) / len(nums), 2) if nums else None, "\n\n".join(texts),
+                        _norm_date(key[4]) or _norm_date(key[3]),
+                        category=(key[0] or "").lower().replace("-", "_").replace(" ", "_").rstrip("s") or None)
+            rv.update({"property": key[2], "agent": any_row.get("assigned_user"),
+                       "vendor": any_row.get("vendor_name"), "scores": scores, "answers": answers})
+            out.append(rv)
+    return out
+
+
 def fetch_supabase():
     """AppFolio survey data stored in Supabase. Needs SUPABASE_URL, SUPABASE_KEY and
     SUPABASE_TABLE (one table, or several separated by commas). Test entries are skipped."""
@@ -420,6 +465,10 @@ def fetch_supabase():
             print(f"  {table}: {len(done)} kept, {n_test} test rows skipped, {n_open} unfinished skipped")
             cat = re.sub(r"_survey_\d+$", "", table)
             out += [_survey_row(cat, table, x) for x in done]
+        elif rows and "question" in rows[0] and "answer" in rows[0]:
+            reviews_ = _long_rows(table, rows)
+            print(f"  {table}: {len(rows)} answer rows -> {len(reviews_)} survey responses")
+            out += reviews_
         else:  # a table loaded from an AppFolio report download
             done = [x for x in rows if not _is_test(x)]
             print(f"  {table}: {len(done)} kept, {len(rows) - len(done)} test rows skipped")
