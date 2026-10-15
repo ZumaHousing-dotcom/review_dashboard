@@ -33,18 +33,3 @@ Google reviews from `ri_reviews` and AppFolio survey answers from the `ri_appfol
 3. Deploy the updated `dashboard.html` to Netlify (as `index.html`).
 
 Helper commands: `--tables`, `--inspect`, `--questions`, `--summary`, `--check`.
-
-
-## Assigning leads in Respond.io
-
-`respondio_assign.py` reads leads from a Google Sheet (`SHEET_CSV_URL`) and/or the Supabase
-leads table (`SUPABASE_LEADS_TABLE`, with `SUPABASE_LEADS_CONTACT_COL` / `SUPABASE_LEADS_ASSIGNEE_COL`),
-skips contacts that already have an assignee in Respond.io, and assigns the rest.
-Needs `RESPONDIO_API_TOKEN`. Use `--tables` to find the leads table, and `--dry-run` first.
-
-### Live version: assign when a tenant messages (Supabase Edge Function)
-
-`supabase/functions/assign-lead/index.ts` is called by a Respond.io Workflow each time a tenant
-messages. It looks the tenant up in the Supabase leads table, and if Respond.io shows no assignee yet,
-assigns the agent from the table. Setup steps are in the chat history / ask your developer; secrets:
-`RESPONDIO_API_TOKEN`, `WEBHOOK_SECRET`, `LEADS_TABLE` (optional `LEADS_PHONE_COL`, `LEADS_EMAIL_COL`, `LEADS_AGENT_COL`).
