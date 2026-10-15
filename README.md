@@ -41,3 +41,10 @@ Helper commands: `--tables`, `--inspect`, `--questions`, `--summary`, `--check`.
 leads table (`SUPABASE_LEADS_TABLE`, with `SUPABASE_LEADS_CONTACT_COL` / `SUPABASE_LEADS_ASSIGNEE_COL`),
 skips contacts that already have an assignee in Respond.io, and assigns the rest.
 Needs `RESPONDIO_API_TOKEN`. Use `--tables` to find the leads table, and `--dry-run` first.
+
+### Live version: assign when a tenant messages (Supabase Edge Function)
+
+`supabase/functions/assign-lead/index.ts` is called by a Respond.io Workflow each time a tenant
+messages. It looks the tenant up in the daily Google Sheet, and if Respond.io shows no assignee yet,
+assigns the agent from the sheet. Setup steps are in the chat history / ask your developer; secrets:
+`RESPONDIO_API_TOKEN`, `SHEET_CSV_URL`, `WEBHOOK_SECRET` (optional `SHEET_PHONE_COL`, `SHEET_EMAIL_COL`, `SHEET_AGENT_COL`).
