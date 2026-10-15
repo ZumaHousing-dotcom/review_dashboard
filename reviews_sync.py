@@ -158,6 +158,24 @@ def fetch_yelp_serpapi(max_pages=None):
         params["start"] += len(batch)
 
 
+def find_yelp(name="Zuma Housing", location="Los Angeles, CA"):
+    """Look up Yelp's internal business code (what SerpApi needs as YELP_BUSINESS_ID)."""
+    r = requests.get("https://serpapi.com/search.json", timeout=TIMEOUT, params={
+        "engine": "yelp", "find_desc": name, "find_loc": location, "api_key": need("SERPAPI_KEY")})
+    r.raise_for_status()
+    d = r.json()
+    if d.get("error"):
+        sys.exit(d["error"])
+    hits = d.get("organic_results") or []
+    print(f"{len(hits)} Yelp results for '{name}' in {location}\n")
+    for h in hits[:8]:
+        ids = h.get("place_ids") or h.get("place_id") or []
+        ids = ids if isinstance(ids, list) else [ids]
+        print(f"{h.get('title')}  |  {h.get('address') or ', '.join(h.get('neighborhoods') or [])}")
+        print(f"   link: {str(h.get('link'))[:100]}")
+        print(f"   YELP_BUSINESS_ID={', '.join(str(i) for i in ids) or '(none shown)'}")
+
+
 def debug_yelp():
     """Show how SerpApi answered for Yelp: field names, counts and any error. No review text."""
     for label, extra in (("newest first", {"sortby": "date_desc"}), ("default order", {}), ("small page", {"num": 10})):
@@ -625,6 +643,7 @@ def main():
     ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
     ap.add_argument("--google-pages", type=int, metavar="N",
                     help="only fetch the newest N pages of Google reviews (saves SerpApi searches)")
+    ap.add_argument("--find-yelp", action="store_true", help="look up Yelp's business code for Zuma Housing")
     ap.add_argument("--debug-yelp", action="store_true", help="show how SerpApi answers for Yelp")
     ap.add_argument("--yelp-pages", type=int, metavar="N", help="only fetch the newest N pages of Yelp reviews")
     ap.add_argument("--push-reviews", action="store_true", help="add Google and Yelp reviews from reviews.json to ri_reviews")
@@ -648,6 +667,8 @@ def main():
         return load_appfolio_csv(a.load_appfolio_csv)
     if a.summary:
         return summarize_supabase()
+    if a.find_yelp:
+        return find_yelp()
     if a.debug_yelp:
         return debug_yelp()
     if a.tables:
