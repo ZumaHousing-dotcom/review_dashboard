@@ -286,6 +286,65 @@ def list_questions(table="appfolio_reviews"):
         print(line)
 
 
+def push_google_to_supabase(path="reviews.json", dry_run=False):
+    """Add Google reviews from reviews.json to the dashboard's ri_reviews table.
+    Only ever INSERTS reviews that are not there yet. It never edits or deletes existing rows."""
+    import uuid
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+
+    def get(table, select, extra=None):
+        out, start = [], 0
+        while True:
+            r = requests.get(f"{base}/rest/v1/{table}", headers=headers, timeout=TIMEOUT,
+                             params={"select": select, "limit": 1000, "offset": start, **(extra or {})})
+            if not r.ok:
+                sys.exit(f"Supabase said {r.status_code} reading {table}: {r.text[:300]}")
+            part = r.json()
+            if not part:
+                return out
+            out += part
+            start += len(part)
+
+    props = get("ri_properties", "id,name")
+    zuma = [p for p in props if "zuma" in (p.get("name") or "").lower()] or props
+    if len(zuma) != 1:
+        sys.exit(f"Expected one Zuma property in ri_properties, found {len(zuma)}: {[p.get('name') for p in zuma]}")
+    prop_id = zuma[0]["id"]
+    spec = requests.get(f"{base}/rest/v1/", headers=headers, timeout=TIMEOUT).json()
+    id_col = spec.get("definitions", {}).get("ri_reviews", {}).get("properties", {}).get("id", {})
+    need_id = not id_col.get("default")
+    have = get("ri_reviews", "external_id,author,text", {"source": "eq.google"})
+    seen_ext = {h["external_id"] for h in have if h.get("external_id")}
+    seen_content = {((h.get("author") or "").strip(), (h.get("text") or "").strip()) for h in have}
+    new = []
+    for r in json.loads(Path(path).read_text())["reviews"]:
+        if r["source"] != "google":
+            continue
+        ext = r["id"].split(":", 1)[1]
+        if ext in seen_ext or (r["author"], r["text"]) in seen_content:
+            continue
+        row = {"property_id": prop_id, "source": "google", "external_id": ext, "author": r["author"],
+               "rating": int(r["rating"]) if r["rating"] is not None else None, "text": r["text"],
+               "reply": r.get("reply"), "created_at": r["date"], "is_excerpt": False}
+        if need_id:
+            row["id"] = str(uuid.uuid4())
+        new.append(row)
+    print(f"{len(have)} Google reviews already in ri_reviews; {len(new)} new to add")
+    if dry_run or not new:
+        print("(dry run, nothing written)" if dry_run else "nothing to add")
+        return
+    wh = dict(headers, **{"Content-Type": "application/json", "Prefer": "return=minimal"})
+    for n in range(0, len(new), 200):
+        r = requests.post(f"{base}/rest/v1/ri_reviews", headers=wh, data=json.dumps(new[n:n + 200]), timeout=TIMEOUT)
+        if not r.ok:
+            sys.exit(f"Supabase said {r.status_code} after adding {n} rows: {r.text[:300]}")
+    print(f"added {len(new)} Google reviews to ri_reviews")
+
+
 def summarize_supabase():
     """Counts only: rows per source and date range for the review tables. No names or text."""
     from collections import Counter
@@ -504,6 +563,8 @@ def main():
     ap.add_argument("--load-appfolio-csv", metavar="FILE", help="upload an AppFolio report into Supabase")
     ap.add_argument("--check", metavar="FILE", nargs="?", const="reviews.json", help="print counts for a reviews.json")
     ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
+    ap.add_argument("--push-google", action="store_true", help="add Google reviews from reviews.json to ri_reviews")
+    ap.add_argument("--dry-run", action="store_true", help="with --push-google: show what would be added, write nothing")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
     ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
@@ -512,6 +573,8 @@ def main():
     load_env()
     if a.questions:
         return list_questions()
+    if a.push_google:
+        return push_google_to_supabase(a.out, a.dry_run)
     if a.check:
         return check_json(a.check)
     if a.load_appfolio_csv:
