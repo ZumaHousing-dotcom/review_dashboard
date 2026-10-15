@@ -228,6 +228,28 @@ def load_appfolio_csv(path):
     print(f"loaded {len(rows)} rows into appfolio_reviews")
 
 
+def check_json(path):
+    """Print counts only (no names or text) so the loaded data can be sanity-checked."""
+    from collections import Counter
+    from datetime import timedelta
+    data = json.loads(Path(path).read_text())["reviews"]
+    today = datetime.now(timezone.utc).date()
+    monday = today - timedelta(days=today.weekday())
+    for src in sorted({r["source"] for r in data}):
+        rs = [r for r in data if r["source"] == src]
+        dates = sorted((r["date"] or "")[:10] for r in rs if r["date"])
+        print(f"\n{src}: {len(rs)} reviews")
+        print(f"  dates: {dates[0]} to {dates[-1]}" if dates else "  dates: none found")
+        print(f"  no date: {sum(1 for r in rs if not r['date'])}, no rating: {sum(1 for r in rs if r['rating'] is None)}, "
+              f"no text: {sum(1 for r in rs if not r['text'])}")
+        print("  ratings:", dict(sorted(Counter(r["rating"] for r in rs).items(), key=lambda kv: str(kv[0]))))
+        print(f"  since Monday {monday}: {sum(1 for r in rs if (r['date'] or '')[:10] >= str(monday))}, "
+              f"last 7 days: {sum(1 for r in rs if (r['date'] or '')[:10] >= str(today - timedelta(days=7)))}")
+        by_month = Counter((r["date"] or "none")[:7] for r in rs)
+        print("  by month:", dict(sorted(by_month.items())))
+        print(f"  distinct authors: {len({r['author'] for r in rs})}, distinct texts: {len({r['text'] for r in rs if r['text']})}")
+
+
 def summarize_supabase():
     """Counts only: rows per source and date range for the review tables. No names or text."""
     from collections import Counter
@@ -394,12 +416,15 @@ def main():
     ap.add_argument("--html", help="exported dashboard HTML to update in place")
     ap.add_argument("--appfolio-csv")
     ap.add_argument("--load-appfolio-csv", metavar="FILE", help="upload an AppFolio report into Supabase")
+    ap.add_argument("--check", metavar="FILE", nargs="?", const="reviews.json", help="print counts for a reviews.json")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
     ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.check:
+        return check_json(a.check)
     if a.load_appfolio_csv:
         return load_appfolio_csv(a.load_appfolio_csv)
     if a.summary:
