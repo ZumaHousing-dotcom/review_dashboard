@@ -1,63 +1,51 @@
-// Supabase Edge Function: assign an incoming Respond.io contact to the agent listed in the Google Sheet.
+// Supabase Edge Function: assign an incoming Respond.io contact to the agent listed in the Supabase leads table.
 //
 // Respond.io Workflow -> HTTP Request (POST, JSON) -> this function:
 //   { "contact_id": "...", "phone": "...", "email": "..." }
-// Steps: look the tenant up in the sheet -> if no row, stop -> if Respond.io already shows an
-// assignee, stop -> otherwise assign the agent from the sheet.
+// Steps: look the tenant up in the leads table -> if no row, stop -> if Respond.io already shows an
+// assignee, stop -> otherwise assign the agent from the table.
 //
 // Secrets (Supabase > Edge Functions > Secrets):
-//   RESPONDIO_API_TOKEN, SHEET_CSV_URL, WEBHOOK_SECRET   (required)
-//   SHEET_PHONE_COL (default "phone"), SHEET_EMAIL_COL (default "email"),
-//   SHEET_AGENT_COL (default "assignee")                 (optional: your sheet's header names)
+//   RESPONDIO_API_TOKEN, WEBHOOK_SECRET, LEADS_TABLE      (required)
+//   LEADS_PHONE_COL (default "phone"), LEADS_EMAIL_COL (default "email"),
+//   LEADS_AGENT_COL (default "assignee")                  (optional: your column names)
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided to the function automatically.
 
 const API = "https://api.respond.io/v2";
 const env = (k: string, d = "") => Deno.env.get(k) ?? d;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-// Minimal CSV parser (handles quoted fields and commas inside quotes).
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [], cell = "", q = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (q) {
-      if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
-      else if (c === '"') q = false;
-      else cell += c;
-    } else if (c === '"') q = true;
-    else if (c === ",") { row.push(cell); cell = ""; }
-    else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(cell); cell = ""; rows.push(row); row = [];
-    } else cell += c;
-  }
-  if (cell || row.length) { row.push(cell); rows.push(row); }
-  return rows;
-}
-
 const digits = (s: string) => s.replace(/\D/g, "");
 const phoneKey = (s: string) => digits(s).slice(-10); // ignore country code / formatting
 const emailKey = (s: string) => s.trim().toLowerCase();
 
-// The sheet changes daily, so re-read it every few minutes instead of on every message.
+// The leads table changes daily, so re-read it every few minutes instead of on every message.
 let cache: { at: number; byPhone: Map<string, string>; byEmail: Map<string, string> } | null = null;
-async function loadSheet() {
+async function loadLeads() {
   if (cache && Date.now() - cache.at < 5 * 60_000) return cache;
-  const r = await fetch(env("SHEET_CSV_URL"));
-  if (!r.ok) throw new Error(`Sheet fetch failed: ${r.status}`);
-  const [head, ...rows] = parseCsv(await r.text());
-  const col = (name: string) => head.findIndex((h) => h.trim().toLowerCase() === name.toLowerCase());
-  const p = col(env("SHEET_PHONE_COL", "phone"));
-  const e = col(env("SHEET_EMAIL_COL", "email"));
-  const a = col(env("SHEET_AGENT_COL", "assignee"));
-  if (a < 0 || (p < 0 && e < 0)) throw new Error("Sheet headers not found; check SHEET_*_COL secrets");
+  const table = env("LEADS_TABLE");
+  const p = env("LEADS_PHONE_COL", "phone"), e = env("LEADS_EMAIL_COL", "email"), a = env("LEADS_AGENT_COL", "assignee");
+  const cols = [p, e, a].filter(Boolean).join(",");
   const byPhone = new Map<string, string>(), byEmail = new Map<string, string>();
-  for (const row of rows) {
-    const agent = (row[a] ?? "").trim();
-    if (!agent) continue;
-    if (p >= 0 && phoneKey(row[p] ?? "").length >= 7) byPhone.set(phoneKey(row[p]), agent);
-    if (e >= 0 && (row[e] ?? "").trim()) byEmail.set(emailKey(row[e]), agent);
+  for (let from = 0; ; from += 1000) { // PostgREST returns at most 1000 rows per request
+    const r = await fetch(`${env("SUPABASE_URL")}/rest/v1/${table}?select=${cols}`, {
+      headers: {
+        apikey: env("SUPABASE_SERVICE_ROLE_KEY"),
+        Authorization: `Bearer ${env("SUPABASE_SERVICE_ROLE_KEY")}`,
+        Range: `${from}-${from + 999}`,
+      },
+    });
+    if (!r.ok) throw new Error(`Supabase read of '${table}' failed: ${r.status} ${await r.text()}`);
+    const rows: Record<string, unknown>[] = await r.json();
+    for (const row of rows) {
+      const agent = String(row[a] ?? "").trim();
+      if (!agent) continue;
+      const ph = String(row[p] ?? ""), em = String(row[e] ?? "");
+      if (phoneKey(ph).length >= 7) byPhone.set(phoneKey(ph), agent);
+      if (em.trim()) byEmail.set(emailKey(em), agent);
+    }
+    if (rows.length < 1000) break;
   }
   cache = { at: Date.now(), byPhone, byEmail };
   return cache;
@@ -78,7 +66,7 @@ Deno.serve(async (req) => {
   if (!contact_id && !phone && !email) return json({ error: "need contact_id, phone or email" }, 400);
 
   try {
-    const sheet = await loadSheet();
+    const sheet = await loadLeads();
     const agent = (phone && sheet.byPhone.get(phoneKey(phone))) || (email && sheet.byEmail.get(emailKey(email)));
     if (!agent) return json({ status: "no_match" });
 
