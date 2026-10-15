@@ -250,6 +250,42 @@ def check_json(path):
         print(f"  distinct authors: {len({r['author'] for r in rs})}, distinct texts: {len({r['text'] for r in rs if r['text']})}")
 
 
+def list_questions(table="appfolio_reviews"):
+    """List each survey question with how many answers it has and what the answers look like.
+    Answers are shown only for short multiple-choice or number questions, never free text."""
+    from collections import Counter, defaultdict
+    base = need("SUPABASE_URL").rstrip("/")
+    key = need("SUPABASE_KEY")
+    headers = {"apikey": key}
+    if key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {key}"
+    rows, start = [], 0
+    while True:
+        r = requests.get(f"{base}/rest/v1/{table}", timeout=TIMEOUT, params={
+            "select": "survey_type,question_no,question,answer,tenant,property,date_received"},
+            headers=dict(headers, Range=f"{start}-{start + 999}"))
+        if not r.ok:
+            sys.exit(f"Supabase said {r.status_code}: {r.text[:300]}")
+        rows += r.json()
+        if len(r.json()) < 1000:
+            break
+        start += 1000
+    groups = defaultdict(list)
+    for x in rows:
+        groups[(x.get("survey_type"), x.get("question_no"), x.get("question"))].append(x.get("answer"))
+    resp = {(x.get("survey_type"), x.get("tenant"), x.get("property"), x.get("date_received")) for x in rows}
+    print(f"{len(rows)} rows = about {len(resp)} survey responses\n")
+    for (st, no, q), answers in sorted(groups.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
+        vals = [a for a in answers if a not in (None, "")]
+        nums = sum(1 for a in vals if re.fullmatch(r"\d+(\.\d+)?", str(a).strip()))
+        distinct = Counter(str(a).strip() for a in vals)
+        print(f"[{st}] Q{no}: {q}")
+        line = f"    {len(vals)} answered, {nums} numeric, {len(distinct)} distinct"
+        if 0 < len(distinct) <= 12:
+            line += "  ->  " + ", ".join(f"{k}: {n}" for k, n in sorted(distinct.items()))
+        print(line)
+
+
 def summarize_supabase():
     """Counts only: rows per source and date range for the review tables. No names or text."""
     from collections import Counter
@@ -417,12 +453,15 @@ def main():
     ap.add_argument("--appfolio-csv")
     ap.add_argument("--load-appfolio-csv", metavar="FILE", help="upload an AppFolio report into Supabase")
     ap.add_argument("--check", metavar="FILE", nargs="?", const="reviews.json", help="print counts for a reviews.json")
+    ap.add_argument("--questions", action="store_true", help="list the AppFolio survey questions")
     ap.add_argument("--summary", action="store_true", help="count rows in the review tables")
     ap.add_argument("--tables", action="store_true", help="list every Supabase table")
     ap.add_argument("--inspect", action="store_true", help="list the Supabase table columns")
     ap.add_argument("--find-place", metavar="NAME", help="look up Google IDs for a business name")
     a = ap.parse_args()
     load_env()
+    if a.questions:
+        return list_questions()
     if a.check:
         return check_json(a.check)
     if a.load_appfolio_csv:
